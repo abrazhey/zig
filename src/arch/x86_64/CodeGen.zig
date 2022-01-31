@@ -680,6 +680,9 @@ fn genBody(self: *Self, body: []const Air.Inst.Index) InnerError!void {
             .wrap_errunion_err     => try self.airWrapErrUnionErr(inst),
             // zig fmt: on
         }
+
+        assert(!self.register_manager.frozenRegsExist());
+
         if (std.debug.runtime_safety) {
             if (self.air_bookkeeping < old_air_bookkeeping + 1) {
                 std.debug.panic("in codegen.zig, handling of AIR instruction %{d} ('{}') did not do proper bookkeeping. Look for a missing call to finishAir.", .{ inst, air_tags[inst] });
@@ -892,13 +895,10 @@ fn airIntCast(self: *Self, inst: Air.Inst.Index) !void {
         if (operand_abi_size > 8 or dest_abi_size > 8) {
             return self.fail("TODO implement intCast for abi sizes larger than 8", .{});
         }
-        const reg = switch (operand) {
-            .register => |src_reg| try self.register_manager.allocReg(inst, &.{src_reg}),
-            else => try self.register_manager.allocReg(inst, &.{}),
-        };
-        try self.genSetReg(dest_ty, reg, .{ .immediate = 0 });
-        try self.genSetReg(dest_ty, reg, operand);
-        break :blk .{ .register = registerAlias(reg, @intCast(u32, dest_abi_size)) };
+
+        if (operand.isRegister()) self.register_manager.freezeRegs(&.{operand.register});
+        defer if (operand.isRegister()) self.register_manager.unfreezeRegs(&.{operand.register});
+        break :blk try self.copyToNewRegister(inst, operand);
     };
 
     return self.finishAir(inst, dst_mcv, .{ ty_op.operand, .none, .none });
